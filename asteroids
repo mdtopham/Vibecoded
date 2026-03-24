@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Neon Vector CRT — Rebuild</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #05060a;
+    color: #d7e3ff;
+    font-family: system-ui, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: none;
+    overscroll-behavior: none;
+  }
+  canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .panel {
+    position: fixed;
+    z-index: 10;
+    background: rgba(5, 8, 14, 0.72);
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 10px;
+    backdrop-filter: blur(4px);
+    font-size: 13px;
+    line-height: 1.25;
+  }
+  #ui {
+    left: 12px;
+    top: 12px;
+    padding: 10px 12px;
+    max-width: min(92vw, 650px);
+  }
+  #hud {
+    right: 12px;
+    top: 12px;
+    padding: 10px 12px;
+    min-width: 140px;
+    text-align: right;
+  }
+  .muted { opacity: 0.82; }
+  b { color: #fff; }
+</style>
+</head>
+<body>
+<div id="ui" class="panel">
+  <div><b>Neon Vector CRT</b> — coherent rebuild</div>
+  <div class="muted">Touch: tap to shoot · hold to steer toward your finger</div>
+  <div class="muted">Keyboard: ←/→ or A/D rotate · ↑/W thrust · ↓/S brake · Space shoot · R restart · B bloom · C palette</div>
+  <div class="muted">Clear a round: after a short delay, a new wave begins. Gain +1 life only if you have fewer than 4.</div>
+  <div class="muted">Alien ships occasionally fly through, avoid rocks, shoot at you and asteroids, and are worth bonus points.</div>
+</div>
+
+<div id="hud" class="panel">
+  <div><b>Lives:</b> <span id="lives">3</span></div>
+  <div><b>Score:</b> <span id="score">0</span></div>
+  <div><b>Round:</b> <span id="round">1</span></div>
+  <div class="muted" id="status">Ready</div>
+</div>
+
+<canvas id="c"></canvas>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+
+  const livesEl = document.getElementById('lives');
+  const scoreEl = document.getElementById('score');
+  const roundEl = document.getElementById('round');
+  const statusEl = document.getElementById('status');
+
+  const palette = [
+    '#7CFFCB', '#60F7FF', '#58C7FF', '#6E8CFF',
+    '#A971FF', '#E470FF', '#FF69C7', '#FF6A6A',
+    '#FF915A', '#FFB85A', '#FFE56A', '#D5FF6A',
+    '#98FF6A', '#5BFF94', '#4DFFD9', '#B7FFF3'
+  ];
+
+  const TAU = Math.PI * 2;
+  let paletteOffset = 0;
+  let bloomEnabled = true;
+  let lastTime = performance.now();
+
+  function pal(i) {
+    return palette[(i + paletteOffset) % palette.length];
+  }
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.floor(innerWidth * dpr);
+    canvas.height = Math.floor(innerHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  addEventListener('resize', resize);
+  resize();
+
+  const keys = Object.create(null);
+  addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+    if (e.code === 'Space') firePlayer();
+    else if (e.key === 'b' || e.key === 'B') bloomEnabled = !bloomEnabled;
+    else if (e.key === 'c' || e.key === 'C') paletteOffset = (paletteOffset + 1) % palette.length;
+    else if (e.key === 'r' || e.key === 'R') restartGame();
+  });
+  addEventListener('keyup', e => { keys[e.code] = false; });
+
+  const pointer = { x: innerWidth * 0.5, y: innerHeight * 0.5, down: false, id: null };
+  function setPointer(e) { pointer.x = e.clientX; pointer.y = e.clientY; }
+  function onPointerDown(e) {
+    if (e.cancelable) e.preventDefault();
+    if (state.gameOver.active) {
+      restartGame();
+      return;
+    }
+    setPointer(e);
+    pointer.down = true;
+    pointer.id = e.pointerId;
+    firePlayer();
+  }
+  function onPointerMove(e) {
+    if (pointer.id !== null && e.pointerId !== pointer.id) return;
+    if (e.cancelable) e.preventDefault();
+    setPointer(e);
+  }
+  function onPointerUp(e) {
+    if (pointer.id !== null && e.pointerId !== pointer.id) return;
+    if (e.cancelable) e.preventDefault();
+    pointer.down = false;
+    pointer.id = null;
+  }
+  canvas.addEventListener('pointerdown', onPointerDown, { passive: false });
+  canvas.addEventListener('pointermove', onPointerMove, { passive: false });
+  canvas.addEventListener('pointerup', onPointerUp, { passive: false });
+  canvas.addEventListener('pointercancel', onPointerUp, { passive: false });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+  canvas.addEventListener('selectstart', e => e.preventDefault());
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function dist2(a, b) { const dx = a.x - b.x, dy = a.y - b.y; return dx*dx + dy*dy; }
+  function len(x, y) { return Math.hypot(x, y); }
+  function mid(a, b) { return { x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5 }; }
+
+  function wrap(obj) {
+    const pad = 120;
+    if (obj.x < -pad) obj.x = innerWidth + pad;
+    if (obj.x > innerWidth + pad) obj.x = -pad;
+    if (obj.y < -pad) obj.y = innerHeight + pad;
+    if (obj.y > innerHeight + pad) obj.y = -pad;
+  }
+
+  function pointSegDist2(p, a, b) {
+    const abx = b.x - a.x, aby = b.y - a.y;
+    const apx = p.x - a.x, apy = p.y - a.y;
+    const d = abx * abx + aby * aby;
+    let t = d > 0 ? (apx * abx + apy * aby) / d : 0;
+    t = clamp(t, 0, 1);
+    const qx = a.x + abx * t;
+    const qy = a.y + aby * t;
+    const dx = p.x - qx, dy = p.y - qy;
+    return dx * dx + dy * dy;
+  }
+
+  function orient(a, b, c) {
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  }
+  function onSeg(a, b, p) {
+    return Math.min(a.x,b.x)-1e-6 <= p.x && p.x <= Math.max(a.x,b.x)+1e-6 &&
+           Math.min(a.y,b.y)-1e-6 <= p.y && p.y <= Math.max(a.y,b.y)+1e-6;
+  }
+  function segmentsIntersect(a, b, c, d) {
+    const o1 = orient(a,b,c), o2 = orient(a,b,d), o3 = orient(c,d,a), o4 = orient(c,d,b);
+    if ((o1 > 0) !== (o2 > 0) && (o3 > 0) !== (o4 > 0)) return true;
+    if (Math.abs(o1) < 1e-6 && onSeg(a,b,c)) return true;
+    if (Math.abs(o2) < 1e-6 && onSeg(a,b,d)) return true;
+    if (Math.abs(o3) < 1e-6 && onSeg(c,d,a)) return true;
+    if (Math.abs(o4) < 1e-6 && onSeg(c,d,b)) return true;
+    return false;
+  }
+  function segSegDist2(a, b, c, d) {
+    if (segmentsIntersect(a,b,c,d)) return 0;
+    return Math.min(
+      pointSegDist2(a, c, d),
+      pointSegDist2(b, c, d),
+      pointSegDist2(c, a, b),
+      pointSegDist2(d, a, b)
+    );
+  }
+
+  function flattenQuadratic(p0, c, p1, steps = 8) {
+    const pts = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps, u = 1 - t;
+      pts.push({
+        x: u*u*p0.x + 2*u*t*c.x + t*t*p1.x,
+        y: u*u*p0.y + 2*u*t*c.y + t*t*p1.y
+      });
+    }
+    return pts;
+  }
+
+  function jitteredCurveLoop(points, jitter = 0.14) {
+    const out = [];
+    for (let i = 0; i < points.length; i++) {
+      const p0 = points[i];
+      const p1 = points[(i + 1) % points.length];
+      const m = mid(p0, p1);
+      const dx = p1.x - p0.x, dy = p1.y - p0.y;
+      const l = Math.hypot(dx, dy) || 1;
+      const nx = -dy / l, ny = dx / l;
+      const bow = l * rand(-jitter, jitter);
+      out.push({ p0, c: { x: m.x + nx * bow, y: m.y + ny * bow }, p1 });
+    }
+    return out;
+  }
+
+  function buildFlatLocal(segments, steps = 7) {
+    const flat = [];
+    for (const seg of segments) {
+      const pts = flattenQuadratic(seg.p0, seg.c, seg.p1, steps);
+      for (let i = 0; i < pts.length; i++) {
+        if (flat.length && i === 0) continue;
+        flat.push(pts[i]);
+      }
+    }
+    return flat;
+  }
+
+  function transformPoint(px, py, obj) {
+    const c = Math.cos(obj.rot || 0), s = Math.sin(obj.rot || 0);
+    return { x: obj.x + px*c - py*s, y: obj.y + px*s + py*c };
+  }
+
+  function transformPolyline(localPts, obj) {
+    const c = Math.cos(obj.rot || 0), s = Math.sin(obj.rot || 0);
+    const out = [];
+    for (const p of localPts) {
+      out.push({ x: obj.x + p.x*c - p.y*s, y: obj.y + p.x*s + p.y*c });
+    }
+    return out;
+  }
+
+  function drawBeamPath(builder, color, width, alpha = 1) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = color;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = color;
+    ctx.shadowBlur = bloomEnabled ? width * 5.5 : 0;
+
+    ctx.globalAlpha = alpha * 0.16;
+    ctx.lineWidth = width * 4.2;
+    ctx.beginPath();
+    builder();
+    ctx.stroke();
+
+    ctx.globalAlpha = alpha * 0.28;
+    ctx.lineWidth = width * 2.2;
+    ctx.beginPath();
+    builder();
+    ctx.stroke();
+
+    ctx.shadowBlur = bloomEnabled ? width * 1.5 : 0;
+    ctx.globalAlpha = alpha * 0.95;
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    builder();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawCurveSegments(segments, obj, color, width, alpha = 1) {
+    drawBeamPath(() => {
+      for (const seg of segments) {
+        const p0 = transformPoint(seg.p0.x, seg.p0.y, obj);
+        const c = transformPoint(seg.c.x, seg.c.y, obj);
+        const p1 = transformPoint(seg.p1.x, seg.p1.y, obj);
+        ctx.moveTo(p0.x, p0.y);
+        ctx.quadraticCurveTo(c.x, c.y, p1.x, p1.y);
+      }
+    }, color, width, alpha);
+  }
+
+  function drawPolyline(points, color, width, alpha = 1) {
+    if (points.length < 2) return;
+    drawBeamPath(() => {
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+    }, color, width, alpha);
+  }
+
+  function drawGlowDisc(x, y, radius, color, alpha) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = bloomEnabled ? radius * 3.5 : 0;
+    ctx.globalAlpha = alpha * 0.08;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, TAU);
+    ctx.fill();
+    ctx.globalAlpha = alpha * 0.28;
+    ctx.shadowBlur = bloomEnabled ? radius * 1.2 : 0;
+    ctx.beginPath();
+    ctx.arc(x, y, radius * 0.38, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function makeCurvedAsteroid(cx, cy, r, colorIndex) {
+    const count = Math.floor(rand(7, 12));
+    const pts = [];
+    for (let i = 0; i < count; i++) {
+      const a = (i / count) * TAU;
+      const rr = r * rand(0.72, 1.26);
+      pts.push({ x: Math.cos(a) * rr, y: Math.sin(a) * rr });
+    }
+    const segments = jitteredCurveLoop(pts, 0.18);
+    return {
+      kind: 'asteroid',
+      x: cx, y: cy,
+      vx: rand(-0.8, 0.8), vy: rand(-0.8, 0.8),
+      rot: rand(0, TAU), rotv: rand(-0.012, 0.012),
+      radius: r,
+      colorIndex,
+      segments,
+      flatLocal: buildFlatLocal(segments, 7)
+    };
+  }
+
+  function makeShipShape() {
+    const hull = [
+      { x: 20, y: 0 },
+      { x: -10, y: -12 },
+      { x: -4, y: 0 },
+      { x: -10, y: 12 }
+    ];
+    const flame = [
+      { x: -10, y: -6 },
+      { x: -22, y: 0 },
+      { x: -10, y: 6 }
+    ];
+    const hullCurves = jitteredCurveLoop(hull, 0.10);
+    return {
+      hullCurves,
+      flameCurves: jitteredCurveLoop(flame, 0.05),
+      hullLocal: buildFlatLocal(hullCurves, 8)
+    };
+  }
+
+  function makeAlienShape() {
+    const hull = [
+      { x: -24, y: 0 }, { x: -12, y: -10 }, { x: 12, y: -10 },
+      { x: 24, y: 0 }, { x: 12, y: 10 }, { x: -12, y: 10 }
+    ];
+    const dome = [
+      { x: -8, y: -4 }, { x: -2, y: -14 }, { x: 2, y: -14 }, { x: 8, y: -4 }
+    ];
+    const hullCurves = jitteredCurveLoop(hull, 0.06);
+    return {
+      hullCurves,
+      domeCurves: jitteredCurveLoop(dome, 0.04),
+      hullLocal: buildFlatLocal(hullCurves, 7)
+    };
+  }
+
+  function makeTextModel(text, scale = 1) {
+    const chars = {
+      'G': [[0,0, 24,0, 24,8, 12,8, 12,16, 24,16, 24,24, 0,24, 0,0]],
+      'A': [[0,24, 10,0, 20,24], [5,14, 15,14]],
+      'M': [[0,24, 0,0, 10,12, 20,0, 20,24]],
+      'E': [[20,0, 0,0, 0,24, 20,24], [0,12, 14,12]],
+      'O': [[0,0, 20,0, 20,24, 0,24, 0,0]],
+      'V': [[0,0, 10,24, 20,0]],
+      'R': [[0,24, 0,0, 14,0, 18,4, 18,8, 14,12, 0,12], [10,12, 20,24]],
+      ' ': []
+    };
+    const curves = [];
+    let xoff = 0;
+    for (const ch of text) {
+      const paths = chars[ch] || [];
+      for (const path of paths) {
+        const pts = [];
+        for (let i = 0; i < path.length; i += 2) {
+          pts.push({ x: xoff + path[i] * scale, y: path[i+1] * scale });
+        }
+        curves.push(pts);
+      }
+      xoff += 28 * scale;
+    }
+    return { paths: curves, width: Math.max(0, xoff - 8 * scale), height: 24 * scale };
+  }
+
+  const shipShape = makeShipShape();
+  const alienShape = makeAlienShape();
+  const gameOverText = makeTextModel('GAME OVER', 1);
+
+  const ship = {
+    x: innerWidth * 0.5,
+    y: innerHeight * 0.5,
+    vx: 0, vy: 0,
+    rot: 0,
+    colorIndex: 1,
+    alive: true,
+    invuln: 0,
+    respawnTimer: 0,
+    boundRadius: 23
+  };
+
+  const state = {
+    score: 0,
+    lives: 3,
+    round: 1,
+    roundDelay: -1,
+    alienCooldown: rand(10, 16),
+    gameOver: { active: false, t: 0 },
+    asteroids: [],
+    trails: [],
+    projectiles: [],
+    alien: null
+  };
+
+  function syncHud() {
+    livesEl.textContent = String(state.lives);
+    scoreEl.textContent = String(state.score);
+    roundEl.textContent = String(state.round);
+    if (state.gameOver.active) statusEl.textContent = 'Game Over';
+    else if (state.roundDelay > 0) statusEl.textContent = 'Preparing next round';
+    else if (!ship.alive) statusEl.textContent = 'Respawning';
+    else if (ship.invuln > 0) statusEl.textContent = 'Shielded';
+    else if (state.alien) statusEl.textContent = 'Alien fly-by';
+    else statusEl.textContent = 'Ready';
+  }
+
+  function explodeAt(x, y, colorIndex, count = 16, scale = 1, harmful = false) {
+    for (let k = 0; k < count; k++) {
+      state.trails.push({
+        x: x + rand(-10, 10) * scale,
+        y: y + rand(-10, 10) * scale,
+        vx: rand(-2.8, 2.8) * scale,
+        vy: rand(-2.8, 2.8) * scale,
+        life: rand(0.45, 1.0),
+        colorIndex: (colorIndex + k) % 16,
+        size: rand(4, 20) * scale,
+        harmful,
+        radius: rand(5, 10) * scale
+      });
+    }
+  }
+
+  function resetShip() {
+    ship.x = innerWidth * 0.5;
+    ship.y = innerHeight * 0.5;
+    ship.vx = 0;
+    ship.vy = 0;
+    ship.rot = 0;
+    ship.alive = true;
+    ship.invuln = 2.0;
+    ship.respawnTimer = 0;
+  }
+
+  function spawnWave() {
+    const count = 8 + state.round * 2;
+    for (let i = 0; i < count; i++) {
+      let x = rand(0, innerWidth), y = rand(0, innerHeight);
+      if ((x - innerWidth * 0.5)**2 + (y - innerHeight * 0.5)**2 < 240*240) {
+        x += 260;
+        y += 160;
+      }
+      state.asteroids.push(makeCurvedAsteroid(x, y, rand(20, 34 + state.round * 3), (i * 2 + state.round) % 16));
+    }
+  }
+
+  function restartGame() {
+    state.score = 0;
+    state.lives = 3;
+    state.round = 1;
+    state.roundDelay = -1;
+    state.alienCooldown = rand(8, 14);
+    state.gameOver.active = false;
+    state.gameOver.t = 0;
+    state.asteroids.length = 0;
+    state.trails.length = 0;
+    state.projectiles.length = 0;
+    state.alien = null;
+    resetShip();
+    spawnWave();
+    syncHud();
+  }
+
+  function fireProjectile(owner, x, y, vx, vy, colorIndex) {
+    state.projectiles.push({ owner, x, y, vx, vy, life: 1.0, colorIndex });
+  }
+
+  function firePlayer() {
+    if (state.gameOver.active || !ship.alive) return;
+    const now = performance.now();
+    if (firePlayer.last && now - firePlayer.last < 110) return;
+    firePlayer.last = now;
+    const dx = Math.cos(ship.rot), dy = Math.sin(ship.rot);
+    fireProjectile('player', ship.x + dx * 20, ship.y + dy * 20, dx * 8 + ship.vx, dy * 8 + ship.vy, (ship.colorIndex + 8) % 16);
+  }
+
+  function killShip() {
+    if (!ship.alive || ship.invuln > 0 || state.gameOver.active) return;
+    ship.alive = false;
+    ship.respawnTimer = 1.35;
+    explodeAt(ship.x, ship.y, ship.colorIndex, 22, 1.2, false);
+    state.lives -= 1;
+    if (state.lives <= 0) {
+      state.gameOver.active = true;
+      state.gameOver.t = 0;
+    }
+    syncHud();
+  }
+
+  function splitAsteroid(index, hitX, hitY, extraImpulse = 0, scoringOwner = null) {
+    const a = state.asteroids[index];
+    explodeAt(hitX, hitY, a.colorIndex, 14, Math.max(0.8, a.radius / 40), false);
+    if (a.radius > 24) {
+      const r1 = a.radius * rand(0.52, 0.66);
+      const r2 = a.radius * rand(0.42, 0.58);
+      const c1 = makeCurvedAsteroid(a.x, a.y, r1, (a.colorIndex + 3) % 16);
+      const c2 = makeCurvedAsteroid(a.x, a.y, r2, (a.colorIndex + 7) % 16);
+      c1.vx += rand(-1.8, -0.3) + extraImpulse;
+      c1.vy += rand(-1.6, 1.6);
+      c2.vx += rand(0.3, 1.8) - extraImpulse;
+      c2.vy += rand(-1.6, 1.6);
+      state.asteroids.push(c1, c2);
+    }
+    state.asteroids.splice(index, 1);
+    if (scoringOwner === 'player') state.score += 10;
+    syncHud();
+  }
+
+  function maybeQueueNextRound() {
+    if (!state.gameOver.active && state.roundDelay < 0 && state.asteroids.length === 0) {
+      state.roundDelay = 2.1;
+      if (state.lives < 4) state.lives += 1;
+      syncHud();
+    }
+  }
+
+  function spawnAlien() {
+    if (state.alien || state.gameOver.active || state.roundDelay > 0) return;
+    const fromLeft = Math.random() < 0.5;
+    state.alien = {
+      x: fromLeft ? -60 : innerWidth + 60,
+      y: rand(80, innerHeight - 80),
+      vx: fromLeft ? rand(2.2, 3.2) : rand(-3.2, -2.2),
+      vy: rand(-0.8, 0.8),
+      rot: 0,
+      colorIndex: 6 + Math.floor(Math.random() * 6),
+      boundRadius: 26,
+      worth: 80,
+      shootTimer: rand(0.8, 1.4)
+    };
+    syncHud();
+  }
+
+  function chooseAlienTarget() {
+    const options = [];
+    if (ship.alive) options.push({ x: ship.x, y: ship.y });
+    for (const a of state.asteroids) options.push({ x: a.x, y: a.y });
+    if (options.length === 0) return null;
+    return options[Math.floor(Math.random() * options.length)];
+  }
+
+  function killAlien() {
+    if (!state.alien) return;
+    explodeAt(state.alien.x, state.alien.y, state.alien.colorIndex, 28, 1.35, true);
+    state.score += state.alien.worth;
+    state.alien = null;
+    syncHud();
+  }
+
+  function updateShip(dt) {
+    if (state.gameOver.active) return;
+    if (!ship.alive) {
+      ship.respawnTimer -= dt;
+      if (ship.respawnTimer <= 0 && state.lives > 0) {
+        resetShip();
+        syncHud();
+      }
+      return;
+    }
+
+    let thrusting = false;
+    const keyboardMode = keys['ArrowUp'] || keys['KeyW'] || keys['ArrowLeft'] || keys['ArrowRight'] || keys['KeyA'] || keys['KeyD'] || keys['ArrowDown'] || keys['KeyS'];
+
+    if (keys['ArrowLeft'] || keys['KeyA']) ship.rot -= 5.1 * dt;
+    if (keys['ArrowRight'] || keys['KeyD']) ship.rot += 5.1 * dt;
+    if (keys['ArrowUp'] || keys['KeyW']) {
+      ship.vx += Math.cos(ship.rot) * 13.2 * dt;
+      ship.vy += Math.sin(ship.rot) * 13.2 * dt;
+      thrusting = true;
+    }
+    if (keys['ArrowDown'] || keys['KeyS']) {
+      ship.vx *= Math.pow(0.96, dt * 60);
+      ship.vy *= Math.pow(0.96, dt * 60);
+    }
+
+    if (!keyboardMode) {
+      const dx = pointer.x - ship.x;
+      const dy = pointer.y - ship.y;
+      const d = Math.hypot(dx, dy) || 1;
+      const accel = pointer.down ? 0.29 : 0.11;
+      const damping = pointer.down ? Math.pow(0.972, dt * 60) : Math.pow(0.985, dt * 60);
+      ship.vx = (ship.vx + dx / d * Math.min(d, 180) * accel * dt) * damping;
+      ship.vy = (ship.vy + dy / d * Math.min(d, 180) * accel * dt) * damping;
+      ship.rot = Math.atan2(pointer.y - ship.y, pointer.x - ship.x);
+      thrusting = pointer.down;
+    } else {
+      ship.vx *= Math.pow(0.992, dt * 60);
+      ship.vy *= Math.pow(0.992, dt * 60);
+    }
+
+    const speed = Math.hypot(ship.vx, ship.vy);
+    const maxSpeed = 7.2;
+    if (speed > maxSpeed) {
+      ship.vx = ship.vx / speed * maxSpeed;
+      ship.vy = ship.vy / speed * maxSpeed;
+    }
+
+    ship.x += ship.vx * dt * 60;
+    ship.y += ship.vy * dt * 60;
+    wrap(ship);
+
+    if (ship.invuln > 0) ship.invuln = Math.max(0, ship.invuln - dt);
+
+    if (thrusting) {
+      state.trails.push({
+        x: ship.x - Math.cos(ship.rot) * 16,
+        y: ship.y - Math.sin(ship.rot) * 16,
+        vx: rand(-0.2, 0.2),
+        vy: rand(-0.2, 0.2),
+        life: 1,
+        colorIndex: (ship.colorIndex + 10) % 16,
+        size: rand(6, 12),
+        harmful: false,
+        radius: 0
+      });
+    }
+  }
+
+  function updateAsteroids(dt) {
+    for (const a of state.asteroids) {
+      a.x += a.vx * dt * 60;
+      a.y += a.vy * dt * 60;
+      a.rot += a.rotv * dt * 60;
+      wrap(a);
+    }
+  }
+
+  function updateAlien(dt) {
+    if (!state.alien) {
+      state.alienCooldown -= dt;
+      if (state.alienCooldown <= 0) {
+        spawnAlien();
+        state.alienCooldown = rand(14, 22);
+      }
+      return;
+    }
+
+    const alien = state.alien;
+    let avoidX = 0, avoidY = 0;
+    for (const a of state.asteroids) {
+      const dx = alien.x - a.x, dy = alien.y - a.y;
+      const d2 = dx*dx + dy*dy;
+      const rr = (a.radius + 90) * (a.radius + 90);
+      if (d2 < rr) {
+        const d = Math.sqrt(d2) || 1;
+        avoidX += dx / d * 0.12;
+        avoidY += dy / d * 0.12;
+      }
+    }
+    alien.vx += avoidX * dt * 60;
+    alien.vy += avoidY * dt * 60;
+    const s = Math.hypot(alien.vx, alien.vy);
+    const maxS = 3.6;
+    if (s > maxS) {
+      alien.vx = alien.vx / s * maxS;
+      alien.vy = alien.vy / s * maxS;
+    }
+    alien.x += alien.vx * dt * 60;
+    alien.y += alien.vy * dt * 60;
+    alien.rot = Math.atan2(alien.vy, alien.vx);
+
+    alien.shootTimer -= dt;
+    if (alien.shootTimer <= 0) {
+      const target = chooseAlienTarget();
+      if (target) {
+        const dx = target.x - alien.x, dy = target.y - alien.y;
+        const d = Math.hypot(dx, dy) || 1;
+        fireProjectile('alien', alien.x, alien.y, dx / d * 5.2 + alien.vx * 0.2, dy / d * 5.2 + alien.vy * 0.2, alien.colorIndex);
+      }
+      alien.shootTimer = rand(0.7, 1.4);
+    }
+
+    if (alien.x < -120 || alien.x > innerWidth + 120 || alien.y < -120 || alien.y > innerHeight + 120) {
+      state.alien = null;
+      syncHud();
+    }
+  }
+
+  function updateProjectiles(dt) {
+    for (let i = state.projectiles.length - 1; i >= 0; i--) {
+      const p = state.projectiles[i];
+      p.x += p.vx * dt * 60;
+      p.y += p.vy * dt * 60;
+      p.life -= 0.018 * dt * 60;
+      wrap(p);
+      if (p.life <= 0) state.projectiles.splice(i, 1);
+    }
+  }
+
+  function updateTrails(dt) {
+    for (let i = state.trails.length - 1; i >= 0; i--) {
+      const t = state.trails[i];
+      t.life -= 0.028 * dt * 60;
+      t.size *= Math.pow(0.985, dt * 60);
+      t.x += (t.vx || 0) * dt * 60;
+      t.y += (t.vy || 0) * dt * 60;
+      if (t.life <= 0 || t.size < 0.5) state.trails.splice(i, 1);
+    }
+    if (state.trails.length > 260) state.trails.splice(0, state.trails.length - 260);
+  }
+
+  function collideProjectiles() {
+    for (let i = state.projectiles.length - 1; i >= 0; i--) {
+      const p = state.projectiles[i];
+      let removed = false;
+
+      for (let j = state.asteroids.length - 1; j >= 0; j--) {
+        const a = state.asteroids[j];
+        if (Math.hypot(p.x - a.x, p.y - a.y) < a.radius * 0.92) {
+          splitAsteroid(j, p.x, p.y, p.owner === 'alien' ? 0.4 : 0, p.owner);
+          state.projectiles.splice(i, 1);
+          removed = true;
+          break;
+        }
+      }
+      if (removed) continue;
+
+      if (p.owner !== 'player' && ship.alive && ship.invuln <= 0 && Math.hypot(p.x - ship.x, p.y - ship.y) < ship.boundRadius + 4) {
+        killShip();
+        state.projectiles.splice(i, 1);
+        continue;
+      }
+
+      if (p.owner === 'player' && state.alien && Math.hypot(p.x - state.alien.x, p.y - state.alien.y) < state.alien.boundRadius + 4) {
+        killAlien();
+        state.projectiles.splice(i, 1);
+      }
+    }
+  }
+
+  function collideShip() {
+    if (!ship.alive || ship.invuln > 0 || state.gameOver.active) return;
+
+    const shipCenter = { x: ship.x, y: ship.y };
+    const shipPoly = transformPolyline(shipShape.hullLocal, ship);
+    const threshold2 = 5.5 * 5.5;
+
+    asteroidLoop:
+    for (const a of state.asteroids) {
+      const r = a.radius + ship.boundRadius + 6;
+      if (dist2(shipCenter, a) > r * r) continue;
+      const aPoly = transformPolyline(a.flatLocal, a);
+      for (let i = 0; i < shipPoly.length - 1; i++) {
+        const sa = shipPoly[i], sb = shipPoly[i + 1];
+        for (let j = 0; j < aPoly.length - 1; j++) {
+          const aa = aPoly[j], ab = aPoly[j + 1];
+          if (segSegDist2(sa, sb, aa, ab) <= threshold2) {
+            killShip();
+            break asteroidLoop;
+          }
+        }
+      }
+    }
+
+    if (state.alien && ship.alive) {
+      const r = state.alien.boundRadius + ship.boundRadius + 8;
+      if (dist2(shipCenter, state.alien) <= r * r) {
+        const shipPoly2 = transformPolyline(shipShape.hullLocal, ship);
+        const alienPoly = transformPolyline(alienShape.hullLocal, state.alien);
+        for (let i = 0; i < shipPoly2.length - 1; i++) {
+          const sa = shipPoly2[i], sb = shipPoly2[i + 1];
+          for (let j = 0; j < alienPoly.length - 1; j++) {
+            const aa = alienPoly[j], ab = alienPoly[j + 1];
+            if (segSegDist2(sa, sb, aa, ab) <= threshold2) {
+              killShip();
+              killAlien();
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  function collideHarmfulFragments() {
+    if (ship.alive && ship.invuln <= 0) {
+      for (const t of state.trails) {
+        if (!t.harmful) continue;
+        if (Math.hypot(t.x - ship.x, t.y - ship.y) < ship.boundRadius + t.radius * 0.35) {
+          killShip();
+          break;
+        }
+      }
+    }
+
+    for (let i = state.trails.length - 1; i >= 0; i--) {
+      const t = state.trails[i];
+      if (!t.harmful) continue;
+      let hit = false;
+      for (let j = state.asteroids.length - 1; j >= 0; j--) {
+        const a = state.asteroids[j];
+        if (Math.hypot(t.x - a.x, t.y - a.y) < a.radius + t.radius * 0.35) {
+          splitAsteroid(j, t.x, t.y, 0.4, null);
+          hit = true;
+          break;
+        }
+      }
+      if (hit) state.trails.splice(i, 1);
+    }
+  }
+
+  function updateRounds(dt) {
+    maybeQueueNextRound();
+    if (state.roundDelay > 0) {
+      state.roundDelay -= dt;
+      if (state.roundDelay <= 0) {
+        state.round += 1;
+        spawnWave();
+        syncHud();
+      }
+    }
+  }
+
+  function updateGameOver(dt) {
+    if (state.gameOver.active) {
+      state.gameOver.t += dt;
+    }
+  }
+
+  function drawBackground() {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = 'rgba(5, 6, 10, 0.23)';
+    ctx.fillRect(0, 0, innerWidth, innerHeight);
+
+    for (let i = 0; i < 36; i++) {
+      const x = (i * 173) % innerWidth;
+      const y = (i * 97) % innerHeight;
+      ctx.fillStyle = 'rgba(255,255,255,0.02)';
+      ctx.fillRect(x, y, 1, 1);
+    }
+
+    const g = ctx.createRadialGradient(innerWidth * 0.5, innerHeight * 0.5, 0, innerWidth * 0.5, innerHeight * 0.5, Math.max(innerWidth, innerHeight) * 0.75);
+    g.addColorStop(0, 'rgba(40,50,70,0.04)');
+    g.addColorStop(1, 'rgba(0,0,0,0.22)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, innerWidth, innerHeight);
+  }
+
+  function drawGrid() {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = 'rgba(120, 160, 255, 0.04)';
+    ctx.lineWidth = 1;
+    for (let x = 0; x < innerWidth; x += 80) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, innerHeight);
+      ctx.stroke();
+    }
+    for (let y = 0; y < innerHeight; y += 80) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(innerWidth, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawTrails() {
+    for (const t of state.trails) {
+      drawGlowDisc(t.x, t.y, t.size, pal(t.colorIndex), t.life);
+    }
+  }
+
+  function drawAsteroids() {
+    for (const a of state.asteroids) {
+      drawCurveSegments(a.segments, a, pal(a.colorIndex), clamp(a.radius * 0.06, 1.2, 3.4), 0.95);
+    }
+  }
+
+  function drawProjectiles() {
+    for (const p of state.projectiles) {
+      const p0 = { x: p.x - p.vx * 1.5, y: p.y - p.vy * 1.5 };
+      const p1 = { x: p.x, y: p.y };
+      drawPolyline([p0, p1], pal(p.colorIndex), 2.2, p.life);
+    }
+  }
+
+  function drawShip() {
+    if (!ship.alive) return;
+    const alpha = ship.invuln > 0 ? (0.45 + 0.45 * Math.sin(performance.now() * 0.02)) : 1.0;
+    drawCurveSegments(shipShape.hullCurves, ship, pal(ship.colorIndex), 2.4, alpha);
+
+    const thrust = Math.hypot(ship.vx, ship.vy);
+    if ((pointer.down || keys['ArrowUp'] || keys['KeyW']) && thrust > 0.18) {
+      const flameObj = { x: ship.x, y: ship.y, rot: ship.rot + rand(-0.05, 0.05) };
+      drawCurveSegments(shipShape.flameCurves, flameObj, pal((ship.colorIndex + 10) % 16), lerp(1.2, 2.4, Math.min(thrust / 4, 1)), 0.8);
+    }
+  }
+
+  function drawAlien() {
+    if (!state.alien) return;
+    drawCurveSegments(alienShape.hullCurves, state.alien, pal(state.alien.colorIndex), 2.2, 0.95);
+    drawCurveSegments(alienShape.domeCurves, state.alien, pal((state.alien.colorIndex + 3) % 16), 1.6, 0.9);
+  }
+
+  function drawGameOver() {
+    if (!state.gameOver.active) return;
+
+    const t = state.gameOver.t;
+    const appear = Math.min(1, t / 0.9);
+    const merge = clamp((t - 2.2) / 1.3, 0, 1);
+
+    const startX = innerWidth * 0.5;
+    const startY = innerHeight * 0.28;
+    const endX = innerWidth * 0.5;
+    const endY = innerHeight * 0.5;
+
+    const x = lerp(startX, endX, merge);
+    const y = lerp(startY, endY, merge);
+    const scale = lerp(4.8, 2.0, appear);
+    const scale2 = lerp(scale, 1.25, merge);
+    const wobble = Math.sin(t * 4.0) * (1 - merge) * 6;
+
+    ctx.save();
+    ctx.translate(x, y + wobble);
+    ctx.scale(scale2, scale2);
+
+    const color = pal(6);
+    for (const path of gameOverText.paths) {
+      const shifted = path.map(p => ({ x: p.x - gameOverText.width * 0.5, y: p.y - gameOverText.height * 0.5 }));
+      drawPolyline(shifted, color, 1.6, 0.95);
+    }
+    ctx.restore();
+
+    if (t > 0.9 && merge < 1) {
+      const subtitleAlpha = 1 - merge;
+      const line = [
+        { x: innerWidth * 0.5 - 120, y: innerHeight * 0.64 },
+        { x: innerWidth * 0.5 + 120, y: innerHeight * 0.64 }
+      ];
+      drawPolyline(line, pal(10), 1.2, subtitleAlpha * 0.65);
+    }
+  }
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - lastTime) / 1000);
+    lastTime = now;
+
+    updateShip(dt);
+    updateAsteroids(dt);
+    updateAlien(dt);
+    updateProjectiles(dt);
+    updateTrails(dt);
+
+    collideProjectiles();
+    collideShip();
+    collideHarmfulFragments();
+    updateRounds(dt);
+    updateGameOver(dt);
+
+    drawBackground();
+    drawGrid();
+    drawTrails();
+    drawAsteroids();
+    drawProjectiles();
+    drawAlien();
+    drawShip();
+    drawGameOver();
+
+    if (bloomEnabled && ship.alive && !state.gameOver.active) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const wash = ctx.createRadialGradient(ship.x, ship.y, 0, ship.x, ship.y, 220);
+      wash.addColorStop(0, 'rgba(100,200,255,0.03)');
+      wash.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = wash;
+      ctx.fillRect(ship.x - 220, ship.y - 220, 440, 440);
+      ctx.restore();
+    }
+
+    requestAnimationFrame(frame);
+  }
+
+  restartGame();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
+
