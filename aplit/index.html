@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Neon Vector CRT — Modular</title>
+<link rel="stylesheet" href="./main.css" />
+</head>
+<body>
+<div id="ui" class="panel">
+  <div><b>Neon Vector CRT</b> — modular split</div>
+  <div class="muted">Touch: tap to shoot · hold to steer toward your finger</div>
+  <div class="muted">Keyboard: ←/→ or A/D rotate · ↑/W thrust · ↓/S brake · Space shoot · R restart · B bloom · C palette</div>
+  <div class="muted">Split into vector routines, canvas renderer, and game logic.</div>
+</div>
+
+<div id="hud" class="panel">
+  <div><b>Lives:</b> <span id="lives">3</span></div>
+  <div><b>Score:</b> <span id="score">0</span></div>
+  <div><b>Round:</b> <span id="round">1</span></div>
+  <div class="muted" id="status">Ready</div>
+</div>
+
+<canvas id="c"></canvas>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
