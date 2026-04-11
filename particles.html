@@ -1,0 +1,832 @@
+<html>
+  <body>
+    
+<script>
+(() => {
+  "use strict";
+
+  // =========================================================
+  // Particle Routing Game - Single JS File
+  // Drop this into a page with:
+  // <script src="game.js"></script>
+  // It creates its own full-screen canvas and UI.
+  // =========================================================
+
+  // -----------------------------
+  // Basic DOM / Canvas setup
+  // -----------------------------
+  document.body.style.margin = "0";
+  document.body.style.overflow = "hidden";
+  document.body.style.background = "#000";
+  document.body.style.fontFamily = "system-ui, sans-serif";
+  document.body.style.userSelect = "none";
+  document.body.style.webkitUserSelect = "none";
+
+  const canvas = document.createElement("canvas");
+  canvas.style.display = "block";
+  canvas.style.background = "#000";
+  document.body.appendChild(canvas);
+
+  const ctx = canvas.getContext("2d");
+
+  let width = 0;
+  let height = 0;
+  let dpr = Math.max(1, window.devicePixelRatio || 1);
+
+  function resizeCanvas() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    dpr = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+    canvas.style.width = width + "px";
+    canvas.style.height = height + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Keep objects inside bounds after resize
+    emitter.x = Math.min(width - 50, Math.max(50, emitter.x));
+    emitter.y = Math.min(height - 50, Math.max(50, emitter.y));
+    target.x = Math.min(width - 50, Math.max(50, target.x));
+    target.y = Math.min(height - 50, Math.max(50, target.y));
+  }
+
+  window.addEventListener("resize", resizeCanvas);
+
+  // -----------------------------
+  // Helpers
+  // -----------------------------
+  function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, v));
+  }
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function dist2(x1, y1, x2, y2) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    return dx * dx + dy * dy;
+  }
+
+  function dist(x1, y1, x2, y2) {
+    return Math.sqrt(dist2(x1, y1, x2, y2));
+  }
+
+  function normalize(x, y) {
+    const len = Math.hypot(x, y) || 1;
+    return { x: x / len, y: y / len };
+  }
+
+  function pointInCircle(px, py, cx, cy, r) {
+    return dist2(px, py, cx, cy) <= r * r;
+  }
+
+  function rgba(hex, a) {
+    const c = hex.replace("#", "");
+    const n = parseInt(c, 16);
+    const r = (n >> 16) & 255;
+    const g = (n >> 8) & 255;
+    const b = n & 255;
+    return `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+
+  // -----------------------------
+  // Game state
+  // -----------------------------
+  const COLORS = [
+    "#ff5c8a", // pink/red
+    "#53c7ff", // blue
+    "#77ff88", // green
+    "#ffd65c", // yellow
+    "#c08cff", // violet
+  ];
+
+  function pickColor() {
+    return COLORS[(Math.random() * COLORS.length) | 0];
+  }
+
+  const emitter = {
+    x: 120,
+    y: 0,
+    radius: 18,
+    color: pickColor(),
+    emitRate: 90,   // particles / sec
+    emitAccumulator: 0,
+    baseSpeed: 160,
+    spread: 0.14,
+  };
+
+  const target = {
+    x: 0,
+    y: 0,
+    radius: 26,
+    influenceRadius: 54,
+    color: emitter.color,
+    progress: 0,
+    decayPerSecond: 0.055, // 5.5% of bar per second
+    fillRate: 0.028,       // added per particle captured
+    done: false,
+  };
+
+  const particles = [];
+  const maxParticles = 1400;
+
+  const tools = {
+    gravity: "gravity",
+    antigravity: "antigravity",
+    delete: "delete",
+  };
+
+  let currentTool = tools.gravity;
+
+  const wells = [];
+  let selectedWell = null;
+  let hoveredWell = null;
+
+  const game = {
+    pointerX: 0,
+    pointerY: 0,
+    mouseDown: false,
+    draggingNewWell: null,
+    draggingMoveWell: false,
+    dragOffsetX: 0,
+    dragOffsetY: 0,
+    placingStartedOnOuterRing: false,
+    resizingWell: false,
+    time: 0,
+    levelWonAt: 0,
+  };
+
+  function createWell(x, y, type) {
+    return {
+      id: Math.random().toString(36).slice(2),
+      x,
+      y,
+      radius: 90,
+      coreRadius: 14,
+      type, // gravity | antigravity
+      strength: type === tools.gravity ? 54000 : -54000,
+      ringFade: 1, // animates toward target
+    };
+  }
+
+  function resetLevel() {
+    wells.length = 0;
+    particles.length = 0;
+
+    emitter.x = 110;
+    emitter.y = height * 0.5;
+    emitter.color = pickColor();
+
+    target.x = width - 150;
+    target.y = height * (0.25 + Math.random() * 0.5);
+    target.radius = 26;
+    target.influenceRadius = 58;
+    target.color = emitter.color;
+    target.progress = 0;
+    target.done = false;
+
+    selectedWell = null;
+    hoveredWell = null;
+    game.draggingNewWell = null;
+    game.draggingMoveWell = false;
+    game.resizingWell = false;
+    game.levelWonAt = 0;
+
+    // Add a small random offset to keep it from being too samey
+    emitter.y = clamp(
+      target.y + (Math.random() * 260 - 130),
+      100,
+      height - 100
+    );
+  }
+
+  // -----------------------------
+  // Input handling
+  // -----------------------------
+  function getMousePos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
+  }
+
+  function findWellAt(x, y) {
+    for (let i = wells.length - 1; i >= 0; i--) {
+      const w = wells[i];
+      if (pointInCircle(x, y, w.x, w.y, w.radius)) {
+        return w;
+      }
+    }
+    return null;
+  }
+
+  function findWellRingAt(x, y) {
+    for (let i = wells.length - 1; i >= 0; i--) {
+      const w = wells[i];
+      const d = dist(x, y, w.x, w.y);
+      if (Math.abs(d - w.radius) <= 12) {
+        return w;
+      }
+    }
+    return null;
+  }
+
+  function canPlaceWell(x, y, radius = 90) {
+    // Avoid placing over emitter or target too closely
+    if (dist(x, y, emitter.x, emitter.y) < radius + emitter.radius + 20) return false;
+    if (dist(x, y, target.x, target.y) < radius + target.influenceRadius + 20) return false;
+    return true;
+  }
+
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  canvas.addEventListener("mousemove", (e) => {
+    const p = getMousePos(e);
+    game.pointerX = p.x;
+    game.pointerY = p.y;
+
+    hoveredWell = findWellAt(p.x, p.y);
+
+    if (game.draggingNewWell) {
+      const w = game.draggingNewWell;
+      const r = dist(w.x, w.y, p.x, p.y);
+      w.radius = clamp(r, 30, 220);
+      return;
+    }
+
+    if (game.resizingWell && selectedWell) {
+      const r = dist(selectedWell.x, selectedWell.y, p.x, p.y);
+      selectedWell.radius = clamp(r, 30, 220);
+      return;
+    }
+
+    if (game.draggingMoveWell && selectedWell) {
+      selectedWell.x = clamp(p.x - game.dragOffsetX, 25, width - 25);
+      selectedWell.y = clamp(p.y - game.dragOffsetY, 25, height - 25);
+    }
+  });
+
+  canvas.addEventListener("mousedown", (e) => {
+    const p = getMousePos(e);
+    game.pointerX = p.x;
+    game.pointerY = p.y;
+    game.mouseDown = true;
+
+    if (e.button === 2) {
+      // Right-click: quick deselect
+      selectedWell = null;
+      return;
+    }
+
+    const ringHit = findWellRingAt(p.x, p.y);
+    const bodyHit = findWellAt(p.x, p.y);
+
+    if (currentTool === tools.delete) {
+      if (bodyHit) {
+        const idx = wells.indexOf(bodyHit);
+        if (idx >= 0) wells.splice(idx, 1);
+        if (selectedWell === bodyHit) selectedWell = null;
+      }
+      return;
+    }
+
+    if (ringHit) {
+      selectedWell = ringHit;
+      game.resizingWell = true;
+      return;
+    }
+
+    if (bodyHit) {
+      selectedWell = bodyHit;
+      game.draggingMoveWell = true;
+      game.dragOffsetX = p.x - bodyHit.x;
+      game.dragOffsetY = p.y - bodyHit.y;
+      return;
+    }
+
+    // Click empty space: create new well
+    if (currentTool === tools.gravity || currentTool === tools.antigravity) {
+      if (!canPlaceWell(p.x, p.y, 30)) {
+        selectedWell = null;
+        return;
+      }
+
+      const w = createWell(p.x, p.y, currentTool);
+      wells.push(w);
+      selectedWell = w;
+      game.draggingNewWell = w;
+    } else {
+      selectedWell = null;
+    }
+  });
+
+  canvas.addEventListener("mouseup", () => {
+    game.mouseDown = false;
+    game.draggingNewWell = null;
+    game.draggingMoveWell = false;
+    game.resizingWell = false;
+  });
+
+  window.addEventListener("keydown", (e) => {
+    const key = e.key.toLowerCase();
+
+    if (key === "1") currentTool = tools.gravity;
+    if (key === "2") currentTool = tools.antigravity;
+    if (key === "3") currentTool = tools.delete;
+    if (key === "r") resetLevel();
+    if (key === "n" && target.done) resetLevel();
+
+    if ((key === "delete" || key === "backspace") && selectedWell) {
+      const idx = wells.indexOf(selectedWell);
+      if (idx >= 0) wells.splice(idx, 1);
+      selectedWell = null;
+    }
+
+    if (selectedWell) {
+      if (key === "[" || key === "-") {
+        selectedWell.radius = clamp(selectedWell.radius - 8, 30, 220);
+      }
+      if (key === "]" || key === "=" || key === "+") {
+        selectedWell.radius = clamp(selectedWell.radius + 8, 30, 220);
+      }
+    }
+  });
+
+  // -----------------------------
+  // Particle logic
+  // -----------------------------
+  function emitParticle() {
+    if (particles.length >= maxParticles) return;
+
+    // Base direction: toward target with a little noise
+    const dir = normalize(target.x - emitter.x, target.y - emitter.y);
+    const angle = Math.atan2(dir.y, dir.x);
+    const a = angle + (Math.random() * 2 - 1) * emitter.spread;
+    const speed = emitter.baseSpeed * (0.9 + Math.random() * 0.25);
+
+    particles.push({
+      x: emitter.x,
+      y: emitter.y,
+      vx: Math.cos(a) * speed,
+      vy: Math.sin(a) * speed,
+      life: 0,
+      maxLife: 10,
+      color: emitter.color,
+      captured: false,
+    });
+  }
+
+  function updateParticles(dt) {
+    emitter.emitAccumulator += emitter.emitRate * dt;
+    while (emitter.emitAccumulator >= 1) {
+      emitParticle();
+      emitter.emitAccumulator -= 1;
+    }
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+
+      // Apply well forces
+      for (let j = 0; j < wells.length; j++) {
+        const w = wells[j];
+        const dx = w.x - p.x;
+        const dy = w.y - p.y;
+        const dSq = dx * dx + dy * dy;
+        const d = Math.sqrt(dSq) || 0.0001;
+
+        if (d < w.radius) {
+          // Stronger near the core, reduced near the edge
+          const falloff = 1 - d / w.radius;
+          const force = (w.strength * falloff) / Math.max(dSq, 60);
+
+          p.vx += (dx / d) * force * dt;
+          p.vy += (dy / d) * force * dt;
+        }
+      }
+
+      // Gentle drag to keep system stable
+      p.vx *= Math.pow(0.992, dt * 60);
+      p.vy *= Math.pow(0.992, dt * 60);
+
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.life += dt;
+
+      // Capture by target influence
+      if (!p.captured && dist2(p.x, p.y, target.x, target.y) <= target.influenceRadius * target.influenceRadius) {
+        p.captured = true;
+        target.progress += target.fillRate;
+        particles.splice(i, 1);
+        continue;
+      }
+
+      // Kill offscreen or too old particles
+      const margin = 80;
+      if (
+        p.life > p.maxLife ||
+        p.x < -margin || p.x > width + margin ||
+        p.y < -margin || p.y > height + margin
+      ) {
+        particles.splice(i, 1);
+      }
+    }
+  }
+
+  // -----------------------------
+  // Update
+  // -----------------------------
+  function update(dt) {
+    game.time += dt;
+
+    updateParticles(dt);
+
+    // Decay target accumulation over time
+    if (!target.done) {
+      target.progress -= target.decayPerSecond * dt;
+      target.progress = clamp(target.progress, 0, 1);
+
+      if (target.progress >= 0.95) {
+        target.done = true;
+        game.levelWonAt = game.time;
+      }
+    }
+
+    // Ring fade animation
+    for (const w of wells) {
+      const targetFade = (w === selectedWell) ? 1.0 : (w === hoveredWell ? 0.45 : 0.23);
+      w.ringFade = lerp(w.ringFade, targetFade, 1 - Math.pow(0.001, dt));
+    }
+  }
+
+  // -----------------------------
+  // Drawing
+  // -----------------------------
+  function drawBackground() {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, width, height);
+  }
+
+  function drawGrid() {
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.04)";
+    ctx.lineWidth = 1;
+
+    const spacing = 48;
+    for (let x = (game.time * 10) % spacing; x < width; x += spacing) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+      ctx.stroke();
+    }
+    for (let y = (game.time * 6) % spacing; y < height; y += spacing) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(width, y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawEmitter() {
+    ctx.save();
+
+    // glow
+    const g = ctx.createRadialGradient(emitter.x, emitter.y, 0, emitter.x, emitter.y, 40);
+    g.addColorStop(0, rgba(emitter.color, 0.35));
+    g.addColorStop(1, rgba(emitter.color, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(emitter.x, emitter.y, 40, 0, Math.PI * 2);
+    ctx.fill();
+
+    // body
+    ctx.fillStyle = emitter.color;
+    ctx.beginPath();
+    ctx.arc(emitter.x, emitter.y, emitter.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // directional hint
+    const dir = normalize(target.x - emitter.x, target.y - emitter.y);
+    ctx.strokeStyle = rgba("#ffffff", 0.5);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(emitter.x, emitter.y);
+    ctx.lineTo(emitter.x + dir.x * 28, emitter.y + dir.y * 28);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawTarget() {
+    ctx.save();
+
+    // influence ring
+    const ringGlow = ctx.createRadialGradient(
+      target.x, target.y, target.radius,
+      target.x, target.y, target.influenceRadius
+    );
+    ringGlow.addColorStop(0, rgba(target.color, 0.20));
+    ringGlow.addColorStop(1, rgba(target.color, 0.02));
+
+    ctx.fillStyle = ringGlow;
+    ctx.beginPath();
+    ctx.arc(target.x, target.y, target.influenceRadius, 0, Math.PI * 2);
+    ctx.fill();
+
+    // outer influence circle
+    ctx.strokeStyle = rgba(target.color, 0.28);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(target.x, target.y, target.influenceRadius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // target body
+    ctx.fillStyle = rgba(target.color, 0.18);
+    ctx.beginPath();
+    ctx.arc(target.x, target.y, target.radius + 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = target.color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(target.x, target.y, target.radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // progress ring
+    const progressAngle = -Math.PI / 2 + Math.PI * 2 * clamp(target.progress, 0, 1);
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(target.x, target.y, target.radius + 11, -Math.PI / 2, progressAngle);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawWells() {
+    for (const w of wells) {
+      const selected = w === selectedWell;
+      const isGravity = w.type === tools.gravity;
+      const color = isGravity ? "#59a8ff" : "#ff7f59";
+      const ringColor = selected ? color : "#8a8a8a";
+
+      ctx.save();
+
+      // Influence fill
+      const grad = ctx.createRadialGradient(w.x, w.y, 0, w.x, w.y, w.radius);
+      if (selected) {
+        grad.addColorStop(0, rgba(color, 0.18));
+        grad.addColorStop(1, rgba(color, 0.03));
+      } else {
+        grad.addColorStop(0, "rgba(128,128,128,0.10)");
+        grad.addColorStop(1, "rgba(128,128,128,0.02)");
+      }
+
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, w.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Outer size circle
+      ctx.strokeStyle = selected
+        ? rgba(ringColor, 0.9 * w.ringFade)
+        : `rgba(150,150,150,${0.18 + 0.35 * w.ringFade})`;
+      ctx.lineWidth = selected ? 3 : 2;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, w.radius, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Core
+      const coreR = Math.max(10, Math.min(18, 10 + w.radius * 0.06));
+
+      const coreGrad = ctx.createRadialGradient(w.x, w.y, 0, w.x, w.y, coreR * 2);
+      if (isGravity) {
+        coreGrad.addColorStop(0, "rgba(255,255,255,0.95)");
+        coreGrad.addColorStop(0.25, rgba(color, 0.95));
+        coreGrad.addColorStop(1, rgba(color, 0));
+      } else {
+        coreGrad.addColorStop(0, "rgba(255,255,255,0.9)");
+        coreGrad.addColorStop(0.3, rgba(color, 0.9));
+        coreGrad.addColorStop(1, rgba(color, 0));
+      }
+
+      ctx.fillStyle = coreGrad;
+      ctx.beginPath();
+      ctx.arc(w.x, w.y, coreR * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Inner symbol
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(w.x - 7, w.y);
+      ctx.lineTo(w.x + 7, w.y);
+      ctx.stroke();
+
+      if (isGravity) {
+        ctx.beginPath();
+        ctx.moveTo(w.x, w.y - 7);
+        ctx.lineTo(w.x, w.y + 7);
+        ctx.stroke();
+      }
+
+      // Selection handles / label
+      if (selected) {
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.font = "12px system-ui, sans-serif";
+        ctx.fillText(
+          `${isGravity ? "Gravity" : "Anti-gravity"}  r=${Math.round(w.radius)}`,
+          w.x + 16,
+          w.y - 14
+        );
+
+        const handleX = w.x + w.radius;
+        const handleY = w.y;
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(handleX, handleY, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+  }
+
+  function drawParticles() {
+    ctx.save();
+    for (let i = 0; i < particles.length; i++) {
+      const p = particles[i];
+
+      const alpha = clamp(1 - p.life / p.maxLife, 0, 1);
+      const speed = Math.hypot(p.vx, p.vy);
+      const tail = clamp(speed * 0.045, 3, 14);
+      const nx = speed > 0.01 ? p.vx / speed : 1;
+      const ny = speed > 0.01 ? p.vy / speed : 0;
+
+      // tail
+      ctx.strokeStyle = rgba(p.color, alpha * 0.35);
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(p.x - nx * tail, p.y - ny * tail);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+
+      // head
+      ctx.fillStyle = rgba(p.color, alpha * 0.95);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawUI() {
+    const boxX = 14;
+    const boxY = 14;
+    const boxW = 370;
+    const boxH = 122;
+
+    ctx.save();
+
+    ctx.fillStyle = "rgba(18,18,18,0.72)";
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.strokeRect(boxX + 0.5, boxY + 0.5, boxW - 1, boxH - 1);
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "15px system-ui, sans-serif";
+    ctx.fillText("Particle Routing", boxX + 14, boxY + 22);
+
+    ctx.fillStyle = "rgba(255,255,255,0.8)";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("1 Gravity   2 Anti-gravity   3 Delete   R Reset   N Next", boxX + 14, boxY + 42);
+    ctx.fillText("Click empty space to place. Drag object to move. Drag outer ring to resize.", boxX + 14, boxY + 60);
+
+    // Current tool
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fillText(`Tool: ${currentTool}`, boxX + 14, boxY + 80);
+
+    // Progress bar
+    const barX = boxX + 14;
+    const barY = boxY + 90;
+    const barW = boxW - 28;
+    const barH = 18;
+
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(barX, barY, barW, barH);
+
+    const progress = clamp(target.progress, 0, 1);
+    ctx.fillStyle = progress >= 0.95 ? "#75ff9a" : target.color;
+    ctx.fillRect(barX, barY, barW * progress, barH);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.16)";
+    ctx.strokeRect(barX + 0.5, barY + 0.5, barW - 1, barH - 1);
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText(
+      `Target charge: ${(progress * 100).toFixed(1)}%   Goal: 95%   Decay active`,
+      barX + 8,
+      barY + 13
+    );
+
+    // Win banner
+    if (target.done) {
+      const w = 340;
+      const h = 70;
+      const x = width * 0.5 - w * 0.5;
+      const y = 24;
+
+      ctx.fillStyle = "rgba(20,50,26,0.85)";
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = "rgba(117,255,154,0.45)";
+      ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+
+      ctx.fillStyle = "#75ff9a";
+      ctx.font = "bold 22px system-ui, sans-serif";
+      ctx.fillText("Target Stabilized", x + 20, y + 29);
+
+      ctx.fillStyle = "#fff";
+      ctx.font = "13px system-ui, sans-serif";
+      ctx.fillText("Press N for another layout, or keep experimenting.", x + 20, y + 52);
+    }
+
+    // Color key
+    ctx.fillStyle = emitter.color;
+    ctx.beginPath();
+    ctx.arc(width - 210, 28, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#fff";
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("Match particle color to target color", width - 194, 32);
+
+    ctx.restore();
+  }
+
+  function drawPlacementPreview() {
+    if (
+      game.mouseDown ||
+      currentTool === tools.delete ||
+      currentTool === tools.gravity ||
+      currentTool === tools.antigravity
+    ) {
+      if (!game.draggingNewWell && !game.draggingMoveWell && !game.resizingWell) {
+        if (currentTool === tools.gravity || currentTool === tools.antigravity) {
+          const color = currentTool === tools.gravity ? "#59a8ff" : "#ff7f59";
+          const ok = canPlaceWell(game.pointerX, game.pointerY, 90);
+
+          ctx.save();
+          ctx.strokeStyle = ok ? rgba(color, 0.35) : "rgba(255,80,80,0.35)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(game.pointerX, game.pointerY, 90, 0, Math.PI * 2);
+          ctx.stroke();
+
+          ctx.fillStyle = ok ? rgba(color, 0.25) : "rgba(255,80,80,0.2)";
+          ctx.beginPath();
+          ctx.arc(game.pointerX, game.pointerY, 10, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+    }
+  }
+
+  // -----------------------------
+  // Main loop
+  // -----------------------------
+  let lastTime = performance.now();
+
+  function frame(now) {
+    const dt = Math.min(0.033, (now - lastTime) / 1000);
+    lastTime = now;
+
+    update(dt);
+
+    drawBackground();
+    drawGrid();
+    drawPlacementPreview();
+    drawTarget();
+    drawWells();
+    drawParticles();
+    drawEmitter();
+    drawUI();
+
+    requestAnimationFrame(frame);
+  }
+
+  // -----------------------------
+  // Start
+  // -----------------------------
+  resizeCanvas();
+  resetLevel();
+  requestAnimationFrame(frame);
+})();
+</script>
+        </body>
+</html>
