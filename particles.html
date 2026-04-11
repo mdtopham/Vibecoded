@@ -130,7 +130,7 @@
   };
 
   const particles = [];
-  const maxParticles = 1400;
+  const maxParticles = 5000;
 
   const tools = {
     gravity: "gravity",
@@ -358,83 +358,82 @@
   // -----------------------------
   // Particle logic
   // -----------------------------
-  function emitParticle() {
-    if (particles.length >= maxParticles) return;
+function emitParticle() {
+  if (particles.length >= maxParticles) return;
 
-    // Base direction: toward target with a little noise
-    const dir = normalize(target.x - emitter.x, target.y - emitter.y);
-    const angle = Math.atan2(dir.y, dir.x);
-    const a = angle + (Math.random() * 2 - 1) * emitter.spread;
-    const speed = emitter.baseSpeed * (0.9 + Math.random() * 0.25);
+  // Base direction: toward target with a little noise
+  const dir = normalize(target.x - emitter.x, target.y - emitter.y);
+  const angle = Math.atan2(dir.y, dir.x);
+  const a = angle + (Math.random() * 2 - 1) * emitter.spread;
+  const speed = emitter.baseSpeed * (0.9 + Math.random() * 0.25);
 
-    particles.push({
-      x: emitter.x,
-      y: emitter.y,
-      vx: Math.cos(a) * speed,
-      vy: Math.sin(a) * speed,
-      life: 0,
-      maxLife: 10,
-      color: emitter.color,
-      captured: false,
-    });
+  particles.push({
+    x: emitter.x,
+    y: emitter.y,
+    vx: Math.cos(a) * speed,
+    vy: Math.sin(a) * speed,
+    life: 0,
+    color: emitter.color,
+    captured: false,
+  });
+}
+
+function updateParticles(dt) {
+  emitter.emitAccumulator += emitter.emitRate * dt;
+  while (emitter.emitAccumulator >= 1) {
+    emitParticle();
+    emitter.emitAccumulator -= 1;
   }
 
-  function updateParticles(dt) {
-    emitter.emitAccumulator += emitter.emitRate * dt;
-    while (emitter.emitAccumulator >= 1) {
-      emitParticle();
-      emitter.emitAccumulator -= 1;
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+
+    // Apply well forces
+    for (let j = 0; j < wells.length; j++) {
+      const w = wells[j];
+      const dx = w.x - p.x;
+      const dy = w.y - p.y;
+      const dSq = dx * dx + dy * dy;
+      const d = Math.sqrt(dSq) || 0.0001;
+
+      if (d < w.radius) {
+        // Stronger near the core, reduced near the edge
+        const falloff = 1 - d / w.radius;
+        const force = (w.strength * falloff) / Math.max(dSq, 60);
+
+        p.vx += (dx / d) * force * dt;
+        p.vy += (dy / d) * force * dt;
+      }
     }
 
-    for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i];
+    // Gentle drag to keep system stable
+    p.vx *= Math.pow(0.992, dt * 60);
+    p.vy *= Math.pow(0.992, dt * 60);
 
-      // Apply well forces
-      for (let j = 0; j < wells.length; j++) {
-        const w = wells[j];
-        const dx = w.x - p.x;
-        const dy = w.y - p.y;
-        const dSq = dx * dx + dy * dy;
-        const d = Math.sqrt(dSq) || 0.0001;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.life += dt;
 
-        if (d < w.radius) {
-          // Stronger near the core, reduced near the edge
-          const falloff = 1 - d / w.radius;
-          const force = (w.strength * falloff) / Math.max(dSq, 60);
+    // Capture by target influence
+    if (!p.captured && dist2(p.x, p.y, target.x, target.y) <= target.influenceRadius * target.influenceRadius) {
+      p.captured = true;
+      target.progress += target.fillRate;
+      particles.splice(i, 1);
+      continue;
+    }
 
-          p.vx += (dx / d) * force * dt;
-          p.vy += (dy / d) * force * dt;
-        }
-      }
-
-      // Gentle drag to keep system stable
-      p.vx *= Math.pow(0.992, dt * 60);
-      p.vy *= Math.pow(0.992, dt * 60);
-
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.life += dt;
-
-      // Capture by target influence
-      if (!p.captured && dist2(p.x, p.y, target.x, target.y) <= target.influenceRadius * target.influenceRadius) {
-        p.captured = true;
-        target.progress += target.fillRate;
-        particles.splice(i, 1);
-        continue;
-      }
-
-      // Kill offscreen or too old particles
-      const margin = 80;
-      if (
-        p.life > p.maxLife ||
-        p.x < -margin || p.x > width + margin ||
-        p.y < -margin || p.y > height + margin
-      ) {
-        particles.splice(i, 1);
-      }
+    // Only remove particles if they go absurdly far away.
+    // This prevents runaway particles from accumulating forever,
+    // while still allowing long, indirect paths.
+    const margin = 4000;
+    if (
+      p.x < -margin || p.x > width + margin ||
+      p.y < -margin || p.y > height + margin
+    ) {
+      particles.splice(i, 1);
     }
   }
-
+}
   // -----------------------------
   // Update
   // -----------------------------
@@ -660,7 +659,8 @@
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i];
 
-      const alpha = clamp(1 - p.life / p.maxLife, 0, 1);
+      //const alpha = clamp(1 - p.life / p.maxLife, 0, 1);
+      const alpha = 0.9;
       const speed = Math.hypot(p.vx, p.vy);
       const tail = clamp(speed * 0.045, 3, 14);
       const nx = speed > 0.01 ? p.vx / speed : 1;
