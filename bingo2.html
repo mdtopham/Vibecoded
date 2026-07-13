@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bingo Card Generator</title>
+
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color-scheme: light dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: Canvas;
+      color: CanvasText;
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin-top: 0;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(300px, 380px) 1fr;
+      gap: 28px;
+      align-items: start;
+    }
+
+    .controls {
+      display: grid;
+      gap: 14px;
+    }
+
+    label {
+      font-weight: 600;
+    }
+
+    textarea,
+    input,
+    select,
+    button {
+      font: inherit;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      padding: 10px;
+    }
+
+    textarea {
+      min-height: 300px;
+      resize: vertical;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .inline {
+      display: flex;
+      gap: 10px;
+      align-items: end;
+      flex-wrap: wrap;
+    }
+
+    .inline > .field {
+      flex: 1;
+      min-width: 140px;
+    }
+
+    .checkbox-label {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding-bottom: 10px;
+      white-space: nowrap;
+    }
+
+    .checkbox-label input {
+      width: auto;
+    }
+
+    button {
+      padding: 10px 16px;
+      cursor: pointer;
+    }
+
+    .primary {
+      font-weight: 700;
+    }
+
+    .danger {
+      color: #b42318;
+    }
+
+    .saved-board-controls {
+      padding: 14px;
+      border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+      border-radius: 8px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .saved-board-controls h2 {
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .message {
+      min-height: 1.5em;
+    }
+
+    .card-wrapper {
+      overflow-x: auto;
+    }
+
+    .card-title {
+      text-align: center;
+      margin: 0 0 12px;
+    }
+
+    .bingo-card {
+      display: grid;
+      width: min(100%, 720px);
+      margin: 0 auto;
+      border-top: 2px solid currentColor;
+      border-left: 2px solid currentColor;
+      background: Canvas;
+    }
+
+    .bingo-cell {
+      aspect-ratio: 1;
+      min-width: 80px;
+      padding: 8px;
+      border-right: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+      user-select: none;
+      cursor: pointer;
+    }
+
+    .bingo-cell.marked {
+      background: color-mix(in srgb, Highlight 30%, Canvas);
+      text-decoration: line-through;
+    }
+
+    .bingo-cell.free {
+      font-weight: 800;
+    }
+
+    .help {
+      opacity: 0.75;
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 800px) {
+      body {
+        padding: 16px;
+      }
+
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      textarea {
+        min-height: 220px;
+      }
+
+      .bingo-cell {
+        min-width: 64px;
+        font-size: 0.85rem;
+      }
+    }
+
+    @media print {
+      body {
+        padding: 0;
+        color: black;
+        background: white;
+      }
+
+      .controls,
+      .help {
+        display: none;
+      }
+
+      .layout {
+        display: block;
+      }
+
+      .bingo-card {
+        width: 100%;
+        max-width: none;
+        color: black;
+        background: white;
+      }
+
+      .bingo-cell {
+        min-width: 0;
+      }
+
+      .bingo-cell.marked {
+        background: #ddd;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <h1>Bingo Card Generator</h1>
+
+    <div class="layout">
+      <section class="controls">
+        <div class="saved-board-controls">
+          <h2>Saved boards</h2>
+
+          <div class="field">
+            <label for="boardName">Board name</label>
+            <input
+              id="boardName"
+              placeholder="Team meeting bingo"
+              autocomplete="off"
+            >
+          </div>
+
+          <div class="inline">
+            <button id="saveBoard" class="primary" type="button">
+              Save board
+            </button>
+
+            <button id="newBoard" type="button">
+              New board
+            </button>
+          </div>
+
+          <div class="field">
+            <label for="savedBoards">Load a saved board</label>
+            <select id="savedBoards">
+              <option value="">No saved boards</option>
+            </select>
+          </div>
+
+          <div class="inline">
+            <button id="loadBoard" type="button">
+              Load
+            </button>
+
+            <button id="deleteBoard" class="danger" type="button">
+              Delete
+            </button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="title">Card title</label>
+          <input id="title" value="Bingo">
+        </div>
+
+        <div class="field">
+          <label for="entries">Words or phrases, one per line</label>
+          <textarea id="entries"></textarea>
+        </div>
+
+        <div class="inline">
+          <div class="field">
+            <label for="size">Card size</label>
+            <select id="size">
+              <option value="3">3 × 3</option>
+              <option value="4">4 × 4</option>
+              <option value="5" selected>5 × 5</option>
+              <option value="6">6 × 6</option>
+            </select>
+          </div>
+
+          <label class="checkbox-label">
+            <input id="freeCentre" type="checkbox" checked>
+            Free centre
+          </label>
+        </div>
+
+        <div class="inline">
+          <button id="generate" class="primary" type="button">
+            Generate card
+          </button>
+
+          <button id="reshuffle" type="button">
+            Reshuffle
+          </button>
+
+          <button id="print" type="button">
+            Print
+          </button>
+        </div>
+
+        <div id="message" class="message" role="status"></div>
+
+        <div class="help">
+          Click a square to mark or unmark it. Saving stores the board only in
+          this browser.
+        </div>
+      </section>
+
+      <section class="card-wrapper">
+        <h2 id="cardTitle" class="card-title">Bingo</h2>
+        <div id="card" class="bingo-card" aria-label="Bingo card"></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const STORAGE_KEY = "bingo-generator-boards";
+    const ACTIVE_BOARD_KEY = "bingo-generator-active-board";
+
+    const boardNameInput = document.querySelector("#boardName");
+    const savedBoardsSelect = document.querySelector("#savedBoards");
+
+    const entriesInput = document.querySelector("#entries");
+    const titleInput = document.querySelector("#title");
+    const sizeInput = document.querySelector("#size");
+    const freeCentreInput = document.querySelector("#freeCentre");
+
+    const card = document.querySelector("#card");
+    const cardTitle = document.querySelector("#cardTitle");
+    const message = document.querySelector("#message");
+
+    let currentBoardId = null;
+    let currentLayout = [];
+
+    function createId() {
+      if (crypto.randomUUID) {
+        return crypto.randomUUID();
+      }
+
+      return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function readSavedBoards() {
+      try {
+        const value = localStorage.getItem(STORAGE_KEY);
+
+        if (!value) {
+          return [];
+        }
+
+        const boards = JSON.parse(value);
+        return Array.isArray(boards) ? boards : [];
+      } catch (error) {
+        console.error("Unable to read saved boards:", error);
+        return [];
+      }
+    }
+
+    function writeSavedBoards(boards) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(boards));
+    }
+
+    function setMessage(text) {
+      message.textContent = text;
+    }
+
+    function parseEntries() {
+      const seen = new Set();
+
+      return entriesInput.value
+        .split(/\r?\n/)
+        .map(entry => entry.trim())
+        .filter(Boolean)
+        .filter(entry => {
+          const key = entry.toLocaleLowerCase();
+
+          if (seen.has(key)) {
+            return false;
+          }
+
+          seen.add(key);
+          return true;
+        });
+    }
+
+    function shuffle(values) {
+      const result = [...values];
+
+      for (let i = result.length - 1; i > 0; i--) {
+        const randomIndex = Math.floor(Math.random() * (i + 1));
+
+        [result[i], result[randomIndex]] =
+          [result[randomIndex], result[i]];
+      }
+
+      return result;
+    }
+
+    function getMarkedIndexes() {
+      return [...card.children]
+        .map((cell, index) => cell.classList.contains("marked") ? index : null)
+        .filter(index => index !== null);
+    }
+
+    function renderCard(layout, markedIndexes = []) {
+      const size = Number(sizeInput.value);
+
+      currentLayout = [...layout];
+      cardTitle.textContent = titleInput.value.trim() || "Bingo";
+
+      card.innerHTML = "";
+      card.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+
+      layout.forEach((value, index) => {
+        const cell = document.createElement("div");
+
+        cell.className = "bingo-cell";
+        cell.tabIndex = 0;
+        cell.textContent = value;
+
+        if (value === "FREE") {
+          cell.classList.add("free");
+        }
+
+        if (markedIndexes.includes(index)) {
+          cell.classList.add("marked");
+        }
+
+        cell.addEventListener("click", () => {
+          cell.classList.toggle("marked");
+          saveActiveBoardState();
+        });
+
+        cell.addEventListener("keydown", event => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            cell.classList.toggle("marked");
+            saveActiveBoardState();
+          }
+        });
+
+        card.appendChild(cell);
+      });
+    }
+
+    function generateCard() {
+      const entries = parseEntries();
+      const size = Number(sizeInput.value);
+      const cellCount = size * size;
+      const hasFreeCentre = freeCentreInput.checked && size % 2 === 1;
+      const requiredEntries = cellCount - (hasFreeCentre ? 1 : 0);
+
+      if (entries.length < requiredEntries) {
+        setMessage(
+          `Add at least ${requiredEntries} unique entries. ` +
+          `You currently have ${entries.length}.`
+        );
+        return false;
+      }
+
+      const shuffledEntries = shuffle(entries).slice(0, requiredEntries);
+      const layout = [];
+      const centreIndex = Math.floor(cellCount / 2);
+
+      let entryIndex = 0;
+
+      for (let index = 0; index < cellCount; index++) {
+        if (hasFreeCentre && index === centreIndex) {
+          layout.push("FREE");
+        } else {
+          layout.push(shuffledEntries[entryIndex++]);
+        }
+      }
+
+      const initiallyMarked = hasFreeCentre ? [centreIndex] : [];
+
+      renderCard(layout, initiallyMarked);
+
+      setMessage(
+        `${requiredEntries} of ${entries.length} entries used.`
+      );
+
+      saveActiveBoardState();
+      return true;
+    }
+
+    function collectBoardState() {
+      return {
+        id: currentBoardId || createId(),
+        name: boardNameInput.value.trim(),
+        title: titleInput.value.trim() || "Bingo",
+        entries: entriesInput.value,
+        size: Number(sizeInput.value),
+        freeCentre: freeCentreInput.checked,
+        layout: [...currentLayout],
+        markedIndexes: getMarkedIndexes(),
+        updatedAt: new Date().toISOString()
+      };
+    }
+
+    function saveBoard() {
+      const name = boardNameInput.value.trim();
+
+      if (!name) {
+        setMessage("Enter a board name before saving.");
+        boardNameInput.focus();
+        return;
+      }
+
+      if (currentLayout.length === 0 && !generateCard()) {
+        return;
+      }
+
+      const boards = readSavedBoards();
+      const board = collectBoardState();
+
+      currentBoardId = board.id;
+
+      const existingIndex = boards.findIndex(
+        savedBoard => savedBoard.id === board.id
+      );
+
+      if (existingIndex >= 0) {
+        boards[existingIndex] = board;
+      } else {
+        boards.push(board);
+      }
+
+      boards.sort((a, b) => a.name.localeCompare(b.name));
+
+      writeSavedBoards(boards);
+      localStorage.setItem(ACTIVE_BOARD_KEY, board.id);
+
+      refreshSavedBoardList(board.id);
+      setMessage(`Saved “${board.name}”.`);
+    }
+
+    function saveActiveBoardState() {
+      if (!currentBoardId) {
+        return;
+      }
+
+      const boards = readSavedBoards();
+      const existingIndex = boards.findIndex(
+        board => board.id === currentBoardId
+      );
+
+      if (existingIndex < 0) {
+        return;
+      }
+
+      const board = collectBoardState();
+      board.name = boards[existingIndex].name;
+
+      boards[existingIndex] = board;
+      writeSavedBoards(boards);
+    }
+
+    function loadBoard(boardId) {
+      const board = readSavedBoards().find(
+        savedBoard => savedBoard.id === boardId
+      );
+
+      if (!board) {
+        setMessage("The selected board could not be found.");
+        return;
+      }
+
+      currentBoardId = board.id;
+
+      boardNameInput.value = board.name || "";
+      titleInput.value = board.title || "Bingo";
+      entriesInput.value = board.entries || "";
+      sizeInput.value = String(board.size || 5);
+      freeCentreInput.checked = Boolean(board.freeCentre);
+
+      renderCard(
+        Array.isArray(board.layout) ? board.layout : [],
+        Array.isArray(board.markedIndexes) ? board.markedIndexes : []
+      );
+
+      savedBoardsSelect.value = board.id;
+      localStorage.setItem(ACTIVE_BOARD_KEY, board.id);
+
+      setMessage(`Loaded “${board.name}”.`);
+    }
+
+    function deleteBoard() {
+      const boardId = savedBoardsSelect.value;
+
+      if (!boardId) {
+        setMessage("Select a saved board to delete.");
+        return;
+      }
+
+      const boards = readSavedBoards();
+      const board = boards.find(savedBoard => savedBoard.id === boardId);
+
+      if (!board) {
+        setMessage("The selected board could not be found.");
+        return;
+      }
+
+      const remainingBoards = boards.filter(
+        savedBoard => savedBoard.id !== boardId
+      );
+
+      writeSavedBoards(remainingBoards);
+
+      if (currentBoardId === boardId) {
+        currentBoardId = null;
+        localStorage.removeItem(ACTIVE_BOARD_KEY);
+      }
+
+      refreshSavedBoardList();
+      setMessage(`Deleted “${board.name}”.`);
+    }
+
+    function refreshSavedBoardList(selectedId = null) {
+      const boards = readSavedBoards();
+
+      savedBoardsSelect.innerHTML = "";
+
+      if (boards.length === 0) {
+        const option = document.createElement("option");
+
+        option.value = "";
+        option.textContent = "No saved boards";
+
+        savedBoardsSelect.appendChild(option);
+        savedBoardsSelect.disabled = true;
+        return;
+      }
+
+      savedBoardsSelect.disabled = false;
+
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Choose a board";
+
+      savedBoardsSelect.appendChild(placeholder);
+
+      boards.forEach(board => {
+        const option = document.createElement("option");
+
+        option.value = board.id;
+        option.textContent = board.name;
+
+        savedBoardsSelect.appendChild(option);
+      });
+
+      if (selectedId && boards.some(board => board.id === selectedId)) {
+        savedBoardsSelect.value = selectedId;
+      }
+    }
+
+    function createNewBoard() {
+      currentBoardId = null;
+      currentLayout = [];
+
+      localStorage.removeItem(ACTIVE_BOARD_KEY);
+
+      boardNameInput.value = "";
+      titleInput.value = "Bingo";
+      sizeInput.value = "5";
+      freeCentreInput.checked = true;
+
+      entriesInput.value = getDefaultEntries();
+      savedBoardsSelect.value = "";
+
+      card.innerHTML = "";
+      cardTitle.textContent = "Bingo";
+
+      generateCard();
+      setMessage("Started a new unsaved board.");
+    }
+
+    function getDefaultEntries() {
+      return [
+        "Someone is on mute",
+        "Can everyone see my screen?",
+        "Unexpected meeting",
+        "Coffee refill",
+        "Technical difficulties",
+        "Someone joins late",
+        "Let's circle back",
+        "Quick question",
+        "Hard stop",
+        "Action item",
+        "Awkward silence",
+        "Background noise",
+        "Follow-up email",
+        "Calendar conflict",
+        "Someone mentions AI",
+        "You're breaking up",
+        "Can you repeat that?",
+        "Side conversation",
+        "Someone shares the wrong screen",
+        "Meeting runs long",
+        "Someone says bandwidth",
+        "Let's take this offline",
+        "Someone mentions a spreadsheet",
+        "No agenda",
+        "Someone leaves early",
+        "Unexpected acronym",
+        "Dog or cat appears",
+        "Someone says deliverable",
+        "VPN problem",
+        "Printer problem"
+      ].join("\n");
+    }
+
+    document.querySelector("#generate").addEventListener("click", generateCard);
+
+    document.querySelector("#reshuffle").addEventListener("click", () => {
+      generateCard();
+    });
+
+    document.querySelector("#print").addEventListener("click", () => {
+      window.print();
+    });
+
+    document.querySelector("#saveBoard").addEventListener("click", saveBoard);
+
+    document.querySelector("#loadBoard").addEventListener("click", () => {
+      loadBoard(savedBoardsSelect.value);
+    });
+
+    document.querySelector("#deleteBoard").addEventListener(
+      "click",
+      deleteBoard
+    );
+
+    document.querySelector("#newBoard").addEventListener(
+      "click",
+      createNewBoard
+    );
+
+    savedBoardsSelect.addEventListener("change", () => {
+      if (savedBoardsSelect.value) {
+        loadBoard(savedBoardsSelect.value);
+      }
+    });
+
+    titleInput.addEventListener("input", () => {
+      cardTitle.textContent = titleInput.value.trim() || "Bingo";
+      saveActiveBoardState();
+    });
+
+    entriesInput.addEventListener("change", saveActiveBoardState);
+    sizeInput.addEventListener("change", saveActiveBoardState);
+    freeCentreInput.addEventListener("change", saveActiveBoardState);
+
+    refreshSavedBoardList();
+
+    const activeBoardId = localStorage.getItem(ACTIVE_BOARD_KEY);
+    const savedBoards = readSavedBoards();
+
+    if (
+      activeBoardId &&
+      savedBoards.some(board => board.id === activeBoardId)
+    ) {
+      loadBoard(activeBoardId);
+    } else {
+      entriesInput.value = getDefaultEntries();
+      generateCard();
+    }
+  </script>
+</body>
+</html>
