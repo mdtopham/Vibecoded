@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bingo Card Generator</title>
+
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color-scheme: light dark;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      background: Canvas;
+      color: CanvasText;
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin-top: 0;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 360px) 1fr;
+      gap: 28px;
+      align-items: start;
+    }
+
+    .controls {
+      display: grid;
+      gap: 14px;
+    }
+
+    label {
+      font-weight: 600;
+    }
+
+    textarea,
+    input,
+    select,
+    button {
+      font: inherit;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 360px;
+      padding: 12px;
+      resize: vertical;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .inline {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    button {
+      padding: 10px 16px;
+      cursor: pointer;
+    }
+
+    .primary {
+      font-weight: 700;
+    }
+
+    .message {
+      min-height: 1.5em;
+    }
+
+    .card-wrapper {
+      overflow-x: auto;
+    }
+
+    .card-title {
+      text-align: center;
+      margin: 0 0 12px;
+    }
+
+    .bingo-card {
+      display: grid;
+      width: min(100%, 720px);
+      margin: 0 auto;
+      border-top: 2px solid currentColor;
+      border-left: 2px solid currentColor;
+      background: Canvas;
+    }
+
+    .bingo-cell {
+      aspect-ratio: 1;
+      min-width: 80px;
+      padding: 8px;
+      border-right: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+      user-select: none;
+      cursor: pointer;
+    }
+
+    .bingo-cell.marked {
+      background: color-mix(in srgb, Highlight 30%, Canvas);
+      text-decoration: line-through;
+    }
+
+    .bingo-cell.free {
+      font-weight: 800;
+    }
+
+    .help {
+      opacity: 0.75;
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 800px) {
+      body {
+        padding: 16px;
+      }
+
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      textarea {
+        min-height: 220px;
+      }
+
+      .bingo-cell {
+        min-width: 64px;
+        font-size: 0.85rem;
+      }
+    }
+
+    @media print {
+      body {
+        padding: 0;
+        color: black;
+        background: white;
+      }
+
+      .controls,
+      .help {
+        display: none;
+      }
+
+      .layout {
+        display: block;
+      }
+
+      .bingo-card {
+        width: 100%;
+        max-width: none;
+        color: black;
+        background: white;
+      }
+
+      .bingo-cell {
+        min-width: 0;
+      }
+
+      .bingo-cell.marked {
+        background: #ddd;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main>
+    <h1>Bingo Card Generator</h1>
+
+    <div class="layout">
+      <section class="controls">
+        <div class="field">
+          <label for="title">Card title</label>
+          <input id="title" value="Bingo">
+        </div>
+
+        <div class="field">
+          <label for="entries">Words or phrases, one per line</label>
+          <textarea id="entries" placeholder="Coffee
+Unexpected meeting
+Someone says “circle back”
+Printer problem
+Free snacks"></textarea>
+        </div>
+
+        <div class="inline">
+          <div class="field">
+            <label for="size">Card size</label>
+            <select id="size">
+              <option value="3">3 × 3</option>
+              <option value="4">4 × 4</option>
+              <option value="5" selected>5 × 5</option>
+              <option value="6">6 × 6</option>
+            </select>
+          </div>
+
+          <label>
+            <input id="freeCentre" type="checkbox" checked>
+            Free centre
+          </label>
+        </div>
+
+        <div class="inline">
+          <button id="generate" class="primary" type="button">
+            Generate card
+          </button>
+
+          <button id="reshuffle" type="button">
+            Reshuffle
+          </button>
+
+          <button id="print" type="button">
+            Print
+          </button>
+        </div>
+
+        <div id="message" class="message" role="status"></div>
+
+        <div class="help">
+          Click a square to mark or unmark it. Duplicate and blank entries are removed.
+        </div>
+      </section>
+
+      <section class="card-wrapper">
+        <h2 id="cardTitle" class="card-title">Bingo</h2>
+        <div id="card" class="bingo-card" aria-label="Bingo card"></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const entriesInput = document.querySelector("#entries");
+    const titleInput = document.querySelector("#title");
+    const sizeInput = document.querySelector("#size");
+    const freeCentreInput = document.querySelector("#freeCentre");
+
+    const card = document.querySelector("#card");
+    const cardTitle = document.querySelector("#cardTitle");
+    const message = document.querySelector("#message");
+
+    let currentEntries = [];
+
+    function parseEntries() {
+      const seen = new Set();
+
+      return entriesInput.value
+        .split(/\r?\n/)
+        .map(entry => entry.trim())
+        .filter(Boolean)
+        .filter(entry => {
+          const key = entry.toLocaleLowerCase();
+
+          if (seen.has(key)) {
+            return false;
+          }
+
+          seen.add(key);
+          return true;
+        });
+    }
+
+    function shuffle(values) {
+      const result = [...values];
+
+      for (let i = result.length - 1; i > 0; i--) {
+        const randomIndex = Math.floor(Math.random() * (i + 1));
+        [result[i], result[randomIndex]] =
+          [result[randomIndex], result[i]];
+      }
+
+      return result;
+    }
+
+    function generateCard(entries = parseEntries()) {
+      const size = Number(sizeInput.value);
+      const cellCount = size * size;
+      const hasFreeCentre = freeCentreInput.checked && size % 2 === 1;
+      const requiredEntries = cellCount - (hasFreeCentre ? 1 : 0);
+
+      cardTitle.textContent = titleInput.value.trim() || "Bingo";
+      card.innerHTML = "";
+      card.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+
+      if (entries.length < requiredEntries) {
+        message.textContent =
+          `Add at least ${requiredEntries} unique entries. ` +
+          `You currently have ${entries.length}.`;
+        return;
+      }
+
+      message.textContent =
+        `${requiredEntries} of ${entries.length} entries used.`;
+
+      currentEntries = shuffle(entries).slice(0, requiredEntries);
+
+      const centreIndex = Math.floor(cellCount / 2);
+      let entryIndex = 0;
+
+      for (let index = 0; index < cellCount; index++) {
+        const cell = document.createElement("div");
+        cell.className = "bingo-cell";
+        cell.tabIndex = 0;
+
+        if (hasFreeCentre && index === centreIndex) {
+          cell.textContent = "FREE";
+          cell.classList.add("free", "marked");
+        } else {
+          cell.textContent = currentEntries[entryIndex++];
+        }
+
+        cell.addEventListener("click", () => {
+          cell.classList.toggle("marked");
+        });
+
+        cell.addEventListener("keydown", event => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            cell.classList.toggle("marked");
+          }
+        });
+
+        card.appendChild(cell);
+      }
+    }
+
+    document.querySelector("#generate").addEventListener("click", () => {
+      generateCard();
+    });
+
+    document.querySelector("#reshuffle").addEventListener("click", () => {
+      generateCard(parseEntries());
+    });
+
+    document.querySelector("#print").addEventListener("click", () => {
+      window.print();
+    });
+
+    titleInput.addEventListener("input", () => {
+      cardTitle.textContent = titleInput.value.trim() || "Bingo";
+    });
+
+    entriesInput.value = [
+      "Someone is on mute",
+      "Can everyone see my screen?",
+      "Unexpected meeting",
+      "Coffee refill",
+      "Technical difficulties",
+      "Someone joins late",
+      "Let's circle back",
+      "Quick question",
+      "Hard stop",
+      "Action item",
+      "Awkward silence",
+      "Background noise",
+      "Follow-up email",
+      "Calendar conflict",
+      "Someone mentions AI",
+      "You're breaking up",
+      "Can you repeat that?",
+      "Side conversation",
+      "Someone shares the wrong screen",
+      "Meeting runs long",
+      "Someone says bandwidth",
+      "Let's take this offline",
+      "Someone mentions a spreadsheet",
+      "No agenda",
+      "Someone leaves early",
+      "Unexpected acronym",
+      "Dog or cat appears",
+      "Someone says deliverable",
+      "VPN problem",
+      "Printer problem"
+    ].join("\n");
+
+    generateCard();
+  </script>
+</body>
+</html>
