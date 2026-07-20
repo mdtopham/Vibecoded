@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>N Scale Train Configurator</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">N SCALE OPERATIONS</p>
+        <h1>Train Configurator</h1>
+        <p class="intro">Choose a train length, then draw a randomized consist from the available rolling-stock cards.</p>
+      </div>
+      <div class="rail-mark" aria-hidden="true">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+    </header>
+
+    <section class="control-panel" aria-labelledby="controls-title">
+      <div>
+        <h2 id="controls-title">Build a consist</h2>
+        <p>Cards are drawn without replacement.</p>
+      </div>
+
+      <label class="quantity-control">
+        <span>Number of cars</span>
+        <div class="quantity-row">
+          <button type="button" id="decrease" aria-label="Decrease number of cars">−</button>
+          <input id="count" type="number" min="1" max="8" value="4" inputmode="numeric">
+          <button type="button" id="increase" aria-label="Increase number of cars">+</button>
+        </div>
+      </label>
+
+      <div class="actions">
+        <button type="button" id="draw" class="primary">Draw train</button>
+        <button type="button" id="reshuffle">Reshuffle</button>
+        <button type="button" id="print">Print</button>
+      </div>
+    </section>
+
+    <section class="result-section" aria-live="polite">
+      <div class="result-heading">
+        <div>
+          <p class="eyebrow">SELECTED CONSIST</p>
+          <h2 id="result-title">Four-car train</h2>
+        </div>
+        <p id="summary"></p>
+      </div>
+      <ol id="train" class="train"></ol>
+    </section>
+
+    <section class="catalogue">
+      <details>
+        <summary>View all available cards</summary>
+        <div id="catalogue" class="catalogue-grid"></div>
+      </details>
+    </section>
+  </main>
+
+  <template id="card-template">
+    <li class="car-card">
+      <div class="position"></div>
+      <div class="image-frame">
+        <img alt="">
+      </div>
+      <div class="card-copy">
+        <div>
+          <p class="car-type"></p>
+          <h3><span class="road"></span> <span class="number"></span></h3>
+        </div>
+        <span class="drag-note">ROLLING STOCK</span>
+      </div>
+    </li>
+  </template>
+
+  <script src="cars.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
